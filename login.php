@@ -1,10 +1,20 @@
 <?php
-// Project: PHP & MySQL Blog Management System (Task 3)
+// Project: PHP & MySQL Blog Management System (Task 4)
 // File: login.php
-// Description: User authentication and session instantiation using Bootstrap 5.
+// Description: Upgraded login with PHP server-side validations, JS client validations, session hardening, and secure prepared statements.
 
-// Start session
-session_start();
+// Start the session with secure configurations
+if (session_status() === PHP_SESSION_NONE) {
+    session_set_cookie_params([
+        'lifetime' => 0,
+        'path' => '/',
+        'domain' => '',
+        'secure' => isset($_SERVER['HTTPS']),
+        'httponly' => true,
+        'samesite' => 'Strict'
+    ]);
+    session_start();
+}
 
 // Redirect user if they are already logged in
 if (isset($_SESSION["logged_in"]) && $_SESSION["logged_in"] === true) {
@@ -22,30 +32,37 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     $username = trim($_POST["username"] ?? "");
     $password = trim($_POST["password"] ?? "");
 
+    // Server-Side Form Validation
     if (empty($username) || empty($password)) {
         $error = "Please enter both username and password.";
     } else {
         try {
-            // Find the user by username
+            // Find the user by username using a secure Prepared Statement
             $stmt = $conn->prepare("SELECT * FROM users WHERE username = :username LIMIT 1");
             $stmt->execute(['username' => $username]);
             $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
             // Verify if user exists and password matches hashed database entry
             if ($user && password_verify($password, $user['password'])) {
+                // SECURITY BEST PRACTICE: Regenerate session ID on successful login to prevent Session Fixation attacks
+                session_regenerate_id(true);
+
                 // Initialize session state
                 $_SESSION["logged_in"] = true;
                 $_SESSION["user_id"] = $user["id"];
                 $_SESSION["username"] = $user["username"];
+                $_SESSION["role"] = $user["role"]; // Store user role (admin/editor)
 
                 // Redirect to dashboard
                 header("Location: dashboard.php");
                 exit;
             } else {
+                // SECURITY BEST PRACTICE: Keep failure messages generic to prevent account enumeration
                 $error = "Invalid username or password.";
             }
         } catch (PDOException $e) {
-            $error = "Database Error: " . $e->getMessage();
+            error_log("Login Query Error: " . $e->getMessage());
+            $error = "An internal system error occurred. Please try again later.";
         }
     }
 }
@@ -62,7 +79,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
     <link rel="stylesheet" href="css/style.css">
 </head>
-<body>
+<body class="bg-light d-flex flex-column min-vh-100">
 
     <!-- Navigation Bar -->
     <nav class="navbar navbar-expand-lg navbar-dark bg-dark shadow-sm">
@@ -76,15 +93,9 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             </button>
             <div class="collapse navbar-collapse" id="navbarNav">
                 <ul class="navbar-nav ms-auto gap-2">
-                    <li class="nav-item">
-                        <a class="nav-link" href="index.php"><i class="bi bi-house-door-fill"></i> Home</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link active" href="login.php"><i class="bi bi-box-arrow-in-right"></i> Login</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="register.php"><i class="bi bi-person-plus-fill"></i> Register</a>
-                    </li>
+                    <li class="nav-item"><a class="nav-link" href="index.php"><i class="bi bi-house-door-fill"></i> Home</a></li>
+                    <li class="nav-item"><a class="nav-link active" href="login.php"><i class="bi bi-box-arrow-in-right"></i> Login</a></li>
+                    <li class="nav-item"><a class="nav-link" href="register.php"><i class="bi bi-person-plus-fill"></i> Register</a></li>
                 </ul>
             </div>
         </div>
@@ -106,12 +117,18 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                         <?php if (!empty($error)): ?>
                             <div class="alert alert-danger d-flex align-items-center gap-2" role="alert">
                                 <i class="bi bi-exclamation-triangle-fill"></i>
-                                <div><?php echo $error; ?></div>
+                                <div><?php echo htmlspecialchars($error); ?></div>
                             </div>
                         <?php endif; ?>
 
+                        <!-- Client-Side JS Alert Placeholder -->
+                        <div id="js-error-alert" class="alert alert-danger d-none align-items-center gap-2" role="alert">
+                            <i class="bi bi-exclamation-triangle-fill"></i>
+                            <div id="js-error-msg"></div>
+                        </div>
+
                         <!-- Form -->
-                        <form action="login.php" method="POST" autocomplete="off">
+                        <form id="login-form" action="login.php" method="POST" autocomplete="off">
                             <div class="mb-3">
                                 <label for="username" class="form-label fw-semibold">Username</label>
                                 <div class="input-group">
@@ -146,9 +163,39 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     <!-- Footer -->
     <footer class="bg-dark text-muted py-4 mt-auto border-top border-primary border-4">
         <div class="container text-center">
-            <p class="mb-0">Task 3: Advanced Blog System | Intern: <span class="text-white fw-bold">Abhinav</span></p>
+            <p class="mb-0">Task 4: Secure Blog System | Intern: <span class="text-white fw-bold">Abhinav</span></p>
         </div>
     </footer>
+
+    <!-- Client-side Validation Handler -->
+    <script>
+    document.getElementById("login-form").addEventListener("submit", function(event) {
+        const usernameInput = document.getElementById("username").value.trim();
+        const passwordInput = document.getElementById("password").value;
+        const errorAlert = document.getElementById("js-error-alert");
+        const errorMsg = document.getElementById("js-error-msg");
+        
+        let clientError = "";
+
+        // Reset errors state
+        errorAlert.classList.add("d-none");
+
+        // Validate fields are not empty
+        if (usernameInput === "") {
+            clientError = "Username is required.";
+        } else if (passwordInput === "") {
+            clientError = "Password is required.";
+        }
+
+        if (clientError !== "") {
+            event.preventDefault(); // Stop form submission
+            errorMsg.textContent = clientError;
+            errorAlert.classList.remove("d-none");
+            errorAlert.classList.add("d-flex");
+            window.scrollTo(0, 0); // Scroll to error display
+        }
+    });
+    </script>
 
     <!-- Bootstrap 5 Bundle JS CDN -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>

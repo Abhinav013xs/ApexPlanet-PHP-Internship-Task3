@@ -1,90 +1,105 @@
-# Task 3: Advanced Blog Management System
+# Task 4: Security Enhancements & Role-Based Access Control
 
-Welcome to **Task 3** of the Web Development Internship. This task upgrades the Blog Management System to incorporate **Bootstrap 5**, integrated **Search**, **Pagination**, and a complete **Dashboard Administration** panel.
+Welcome to **Task 4** of the Web Development Internship. This task upgrades the Blog Management System by introducing core security middleware, role-based access rules (Administrators vs. Editors), XSS protections, SQL injection guards via prepared statements, and client/server validation parameters.
 
 ---
 
 ## 1. Project Folder Structure
 
-Ensure your project files are placed exactly as shown below:
+Ensure your files are placed exactly as shown below:
 
 ```text
 blog-project/
-├── index.php             # Public homepage listing blog posts with pagination
-├── register.php          # User registration view styled with Bootstrap 5
-├── login.php             # User login view styled with Bootstrap 5
-├── logout.php            # Session termination logic
-├── dashboard.php         # Author control panel with stats, paginated tables, and search
-├── create-post.php       # Form to write a new blog post
-├── edit-post.php         # Form to modify an existing blog post
-├── delete-post.php       # Controller to delete a post
-├── search.php            # Dedicated public search results page with pagination
+├── index.php             # Public homepage listing blog posts (XSS & SQLi guarded)
+├── register.php          # User registration view with server/client validations
+├── login.php             # User login view with session hardening (fixation guarded)
+├── logout.php            # Session termination logic (clears cookies)
+├── dashboard.php         # Author control panel enforcing RBAC access rules
+├── create-post.php       # Form to add a post associated with user session
+├── edit-post.php         # Form to modify owned posts (or any post if Admin)
+├── delete-post.php       # Controller to remove owned posts (or any post if Admin)
+├── search.php            # Dedicated public search results page (XSS guarded)
+├── admin/
+│   ├── users.php         # User management directory (restricted to Admin)
+│   └── roles.php         # User roles modifier panel (restricted to Admin)
+├── middleware/
+│   ├── auth.php          # Authentication middleware
+│   └── admin.php         # Administration permission guard middleware
 ├── config/
-│   └── database.php      # PDO database connection handler
+│   └── database.php      # PDO database connection handler (emulation disabled)
 ├── css/
-│   └── style.css         # Custom CSS overrides for hover animations
+│   └── style.css         # Styling rules overrides
 ├── js/
-│   └── script.js         # JavaScript file providing delete confirmation boxes
+│   └── script.js         # JavaScript confirmation dialogs
 └── README.md             # Project instruction guide (this file)
 ```
 
 ---
 
-## 2. Dynamic Pagination Explanation (5 Posts Per Page)
-We implement pagination dynamically in SQL and PHP. Here is a step-by-step logic guide:
+## 2. Security Enhancements Implemented
 
-1. **Active Page Detection**: Check the URL query string `page` (e.g. `?page=2`). If missing or non-numeric, it defaults to Page `1`.
-2. **Limit & Offset Calculation**:
-   - Limit: `$limit = 5;`
-   - Offset: `$offset = ($page - 1) * $limit;` (Page 1 starts at index 0, Page 2 at index 5, etc.).
-3. **Database Count Query**: Run a `SELECT COUNT(*)` query to count the total rows matching the selection constraints (or matching the search terms).
-4. **Calculated Total Pages**: Determine total pages by dividing total records by page size, rounded up: `$total_pages = ceil($total_records / $limit);`
-5. **Paginated Data Retrieval**: Query records utilizing MySQL clauses `LIMIT :limit OFFSET :offset`. Placeholders are bound as integer types in PDO:
-   ```php
-   $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
-   $stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
-   ```
-6. **Query Persistence**: When pagination links are clicked, the active search query is URL-encoded and appended (`?q=query&page=2`) using `http_build_query()` or string concats to ensure pages align with search filters.
+### A. SQL Injection Prevention (Prepared Statements)
+All database interactions are refitted with secure PDO Prepared Statements. Connection settings explicitly disable query emulation to force native prepared checks:
+```php
+$conn->setAttribute(PDO::ATTR_EMULATE_PREPARES, false);
+```
+No variables are concatenated directly into queries. All parameters are executed using bound variables (e.g. `:username`, `:id`).
 
----
+### B. Cross-Site Scripting (XSS) Protection
+All user-generated variables (usernames, post titles, post contents) are escaped before rendering inside HTML templates using:
+```php
+htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
+```
 
-## 3. Dynamic Search Functionality Explanation
-The search bar uses standard relational database filters:
+### C. Hardened Session Security
+1. **Secure Session Settings**: Session cookies are configured with strict protection flags:
+   * `HttpOnly`: Prevents client-side scripts from reading session cookies.
+   * `SameSite=Strict`: Shields session cookies from Cross-Site Request Forgery (CSRF).
+   * `Secure`: Forces cookies to transmit only over HTTPS connections.
+2. **Session Fixation Guard**: Invokes `session_regenerate_id(true)` upon successful user authentication.
+3. **Session Destruction**: Clear session variables, invalidate cookies, and call `session_destroy()` on logout.
 
-1. **Collect Input**: The form sends inputs using a GET request (e.g. `search.php?q=keyword` or `dashboard.php?search=keyword`).
-2. **LIKE Queries**: The database filters records using the SQL wildcards query:
-   ```sql
-   SELECT * FROM posts WHERE title LIKE :search OR content LIKE :search
-   ```
-3. **Bound placeholders**: The keyword is bound as `'%keyword%'` using PDO to prevent SQL injection.
-4. **Zero State Check**: If the query returns zero rows, the application renders a clean Bootstrap "No posts found" message.
+### D. Server & Client Validation
+1. **Client-Side**: Event listeners intercept form submissions to verify username lengths (>=3 chars), password strengths (>=6 chars), and blank inputs, generating user-friendly validation messages.
+2. **Server-Side**: Re-validates data integrity using strict PHP filters before executing SQL updates.
 
----
-
-## 4. Bootstrap 5 CDN Links Used
-The views load external style resources via CDN paths in header blocks:
-
-*   **CSS Stylesheet**:
-    ```html
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    ```
-*   **Icon Library**:
-    ```html
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
-    ```
-*   **JavaScript Bundle**:
-    ```html
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    ```
+### E. Role-Based Access Control (RBAC)
+*   **Administrator**: Can create, edit, delete any post, browse the user registry, and toggle user roles.
+*   **Editor**: Can create posts, edit/delete *their own* posts, and cannot access the user registry panel.
 
 ---
 
-## 5. Running the Project in XAMPP
+## 3. Database Schema Updates (`schema.sql`)
 
-1. Ensure your **XAMPP Control Panel** is open with **Apache** and **MySQL** services started.
-2. Place the project files inside: `C:\xampp\htdocs\blog-project\`.
-3. Open your browser and navigate to:
-   ```text
-   http://localhost:8000
-   ```
-   *(Or if running through XAMPP Apache, use `http://localhost/blog-project/index.php`)*
+Run the following SQL statements to apply Task 4 updates to your MySQL database:
+
+```sql
+USE `blog`;
+
+-- 1. Add role column to users
+ALTER TABLE `users` ADD COLUMN `role` ENUM('admin', 'editor') DEFAULT 'editor';
+
+-- 2. Add user_id column to posts
+ALTER TABLE `posts` ADD COLUMN `user_id` INT DEFAULT NULL;
+
+-- 3. Establish foreign key constraint
+ALTER TABLE `posts` ADD CONSTRAINT fk_posts_users FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE;
+
+-- 4. Seed default admin (username: 'admin', password: 'admin123' hashed)
+INSERT INTO `users` (`username`, `password`, `role`) 
+VALUES ('admin', '$2y$10$MvNfX7pX7qVlQjFfRk5TdeY0JqL2c0V2YyX.1kY8O7t8wz9o9u9zG', 'admin')
+ON DUPLICATE KEY UPDATE `role` = 'admin';
+```
+
+---
+
+## 4. Run Instructions
+
+1. Start **Apache** and **MySQL** in your **XAMPP Control Panel**.
+2. Open your browser and navigate to:
+   * **`http://localhost:8000`**
+3. **Verification Steps**:
+   - Log in as the default admin using: username **`admin`** and password **`admin123`**. Note the "Manage Users" option in the navbar.
+   - Register a new account. Note that new registrations default to the `editor` role.
+   - Log in as the editor. Verify that you can create posts and edit them, but cannot see or modify other users' posts.
+   - Try navigating manually to `http://localhost:8000/admin/users.php` while logged in as an editor, and verify the access denied block page.

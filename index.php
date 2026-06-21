@@ -1,10 +1,20 @@
 <?php
-// Project: PHP & MySQL Blog Management System (Task 3)
+// Project: PHP & MySQL Blog Management System (Task 4)
 // File: index.php
-// Description: Public landing homepage with Bootstrap 5 cards, search form, and pagination.
+// Description: Public homepage showing posts, protected against XSS and SQL Injection via prepared statements.
 
-// Start the session
-session_start();
+// Start the session securely
+if (session_status() === PHP_SESSION_NONE) {
+    session_set_cookie_params([
+        'lifetime' => 0,
+        'path' => '/',
+        'domain' => '',
+        'secure' => isset($_SERVER['HTTPS']),
+        'httponly' => true,
+        'samesite' => 'Strict'
+    ]);
+    session_start();
+}
 
 // Include database configurations
 require_once "config/database.php";
@@ -31,17 +41,24 @@ try {
     // Calculate total pages
     $total_pages = ceil($total_posts / $limit);
 
-    // 2. Fetch the paginated articles (latest first)
-    $stmt = $conn->prepare("SELECT * FROM posts ORDER BY created_at DESC LIMIT :limit OFFSET :offset");
+    // 2. Fetch the paginated articles joined with authors (using PDO prepared statements)
+    $stmt = $conn->prepare("
+        SELECT posts.*, users.username 
+        FROM posts 
+        LEFT JOIN users ON posts.user_id = users.id 
+        ORDER BY posts.created_at DESC 
+        LIMIT :limit OFFSET :offset
+    ");
     
-    // Bind parameters as integers to prevent SQL syntax errors in prepared limits
+    // Bind parameters explicitly as integers to avoid SQL Injection in LIMIT/OFFSET clauses
     $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
     $stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
     
     $stmt->execute();
     $posts = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (PDOException $e) {
-    $error_message = "Could not retrieve articles: " . $e->getMessage();
+    error_log("Index Retrieve Error: " . $e->getMessage());
+    $error_message = "Could not retrieve articles due to an internal error.";
 }
 ?>
 <!DOCTYPE html>
@@ -56,7 +73,7 @@ try {
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
     <link rel="stylesheet" href="css/style.css">
 </head>
-<body>
+<body class="bg-light d-flex flex-column min-vh-100">
 
     <!-- Responsive Navigation Bar -->
     <nav class="navbar navbar-expand-lg navbar-dark bg-dark shadow-sm">
@@ -80,7 +97,7 @@ try {
                         </li>
                         <li class="nav-item">
                             <a class="nav-link logout-link text-danger" href="logout.php">
-                                <i class="bi bi-box-arrow-right"></i> Logout (<?php echo htmlspecialchars($_SESSION["username"]); ?>)
+                                <i class="bi bi-box-arrow-right"></i> Logout (<?php echo htmlspecialchars($_SESSION["username"], ENT_QUOTES, 'UTF-8'); ?>)
                             </a>
                         </li>
                     <?php else: ?>
@@ -103,7 +120,7 @@ try {
         <div class="row align-items-center mb-5 border-bottom pb-4">
             <div class="col-md-6 col-lg-7">
                 <h1 class="display-5 fw-bold text-dark mb-1">Welcome to BlogSystem</h1>
-                <p class="text-muted fs-5 mb-0">A simple blog site built using PHP, MySQL & Bootstrap 5.</p>
+                <p class="text-muted fs-5 mb-0">A secure blog site built using PHP, MySQL & Bootstrap 5.</p>
             </div>
             
             <!-- Public Search Form (Redirects to search.php) -->
@@ -122,7 +139,7 @@ try {
         <?php if (!empty($error_message)): ?>
             <div class="alert alert-danger d-flex align-items-center gap-2" role="alert">
                 <i class="bi bi-exclamation-triangle-fill"></i>
-                <div><?php echo $error_message; ?></div>
+                <div><?php echo htmlspecialchars($error_message); ?></div>
             </div>
         <?php endif; ?>
 
@@ -134,12 +151,19 @@ try {
                     <?php foreach ($posts as $post): ?>
                         <div class="card shadow-sm border-0 rounded-3 mb-4 hover-card">
                             <div class="card-body p-4">
-                                <h2 class="card-title h3 fw-bold mb-2"><?php echo htmlspecialchars($post['title']); ?></h2>
+                                <!-- XSS Protection: sanitizing title on output -->
+                                <h2 class="card-title h3 fw-bold mb-2"><?php echo htmlspecialchars($post['title'], ENT_QUOTES, 'UTF-8'); ?></h2>
+                                
                                 <p class="card-subtitle text-muted mb-3 fs-7">
+                                    <!-- XSS Protection: sanitizing username on output -->
+                                    <i class="bi bi-person"></i> By: <strong><?php echo htmlspecialchars($post['username'] ?? 'System', ENT_QUOTES, 'UTF-8'); ?></strong>
+                                    <span class="mx-2">|</span>
                                     <i class="bi bi-calendar3"></i> Published on: <?php echo date('F d, Y \a\t g:i A', strtotime($post['created_at'])); ?>
                                 </p>
+                                
+                                <!-- XSS Protection: sanitizing content on output -->
                                 <div class="card-text post-content-preview">
-                                    <?php echo htmlspecialchars($post['content']); ?>
+                                    <?php echo htmlspecialchars($post['content'], ENT_QUOTES, 'UTF-8'); ?>
                                 </div>
                             </div>
                         </div>
@@ -197,7 +221,7 @@ try {
     <!-- Footer -->
     <footer class="bg-dark text-muted py-4 mt-auto border-top border-primary border-4">
         <div class="container text-center">
-            <p class="mb-0">Task 3: Advanced Blog System | Intern: <span class="text-white fw-bold">Abhinav</span></p>
+            <p class="mb-0">Task 4: Secure Blog System | Intern: <span class="text-white fw-bold">Abhinav</span></p>
         </div>
     </footer>
 

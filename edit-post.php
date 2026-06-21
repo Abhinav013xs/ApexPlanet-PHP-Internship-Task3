@@ -1,16 +1,10 @@
 <?php
-// Project: PHP & MySQL Blog Management System (Task 3)
+// Project: PHP & MySQL Blog Management System (Task 4)
 // File: edit-post.php
-// Description: Form to modify existing blog articles using Bootstrap 5.
+// Description: Upgraded post editor enforcing ownership controls (RBAC) and validating content lengths.
 
-// Start session
-session_start();
-
-// Verify user authentication
-if (!isset($_SESSION["logged_in"]) || $_SESSION["logged_in"] !== true) {
-    header("Location: login.php");
-    exit;
-}
+// Enforce auth session middleware
+require_once "middleware/auth.php";
 
 // Include database connection
 require_once "config/database.php";
@@ -25,7 +19,7 @@ if (empty($post_id)) {
     exit;
 }
 
-// Fetch the existing post details
+// Fetch the existing post details and author associations
 try {
     $stmt = $conn->prepare("SELECT * FROM posts WHERE id = :id LIMIT 1");
     $stmt->execute(['id' => $post_id]);
@@ -37,8 +31,17 @@ try {
         header("Location: dashboard.php");
         exit;
     }
+
+    // SECURITY CHECK (RBAC): Enforce ownership permissions
+    // Admin can edit any post, Editors can ONLY edit their own posts
+    if ($_SESSION["role"] !== "admin" && (int)$post["user_id"] !== (int)$_SESSION["user_id"]) {
+        $_SESSION["error"] = "Access Denied: You do not have permission to edit this article.";
+        header("Location: dashboard.php");
+        exit;
+    }
 } catch (PDOException $e) {
-    $_SESSION["error"] = "Database Error: " . $e->getMessage();
+    error_log("Post Edit Fetch Error: " . $e->getMessage());
+    $_SESSION["error"] = "An internal system error occurred.";
     header("Location: dashboard.php");
     exit;
 }
@@ -48,12 +51,16 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     $title = trim($_POST["title"] ?? "");
     $content = trim($_POST["content"] ?? "");
 
-    // Validation
-    if (empty($title) || empty($content)) {
-        $error = "Please fill in both the title and the content.";
+    // Server-Side Form Validation
+    if (empty($title)) {
+        $error = "Post title is required.";
+    } elseif (empty($content)) {
+        $error = "Post content is required.";
+    } elseif (strlen($content) < 10) {
+        $error = "Post content must be at least 10 characters long.";
     } else {
         try {
-            // Update SQL statement
+            // Update SQL using prepared statement
             $update_stmt = $conn->prepare("UPDATE posts SET title = :title, content = :content WHERE id = :id");
             $update_stmt->execute([
                 'title' => $title,
@@ -66,7 +73,8 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             header("Location: dashboard.php");
             exit;
         } catch (PDOException $e) {
-            $error = "Database Error: " . $e->getMessage();
+            error_log("Post Edit Update Query Error: " . $e->getMessage());
+            $error = "An error occurred updating the database. Please try again later.";
         }
     }
 }
@@ -83,7 +91,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
     <link rel="stylesheet" href="css/style.css">
 </head>
-<body>
+<body class="bg-light d-flex flex-column min-vh-100">
 
     <!-- Navigation Bar -->
     <nav class="navbar navbar-expand-lg navbar-dark bg-dark shadow-sm">
@@ -97,15 +105,11 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             </button>
             <div class="collapse navbar-collapse" id="navbarNav">
                 <ul class="navbar-nav ms-auto gap-2">
-                    <li class="nav-item">
-                        <a class="nav-link" href="index.php"><i class="bi bi-house-door-fill"></i> Home</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link active" href="dashboard.php"><i class="bi bi-speedometer2"></i> Dashboard</a>
-                    </li>
+                    <li class="nav-item"><a class="nav-link" href="index.php"><i class="bi bi-house-door-fill"></i> Home</a></li>
+                    <li class="nav-item"><a class="nav-link active" href="dashboard.php"><i class="bi bi-speedometer2"></i> Dashboard</a></li>
                     <li class="nav-item">
                         <a class="nav-link logout-link text-danger" href="logout.php">
-                            <i class="bi bi-box-arrow-right"></i> Logout (<?php echo htmlspecialchars($_SESSION["username"]); ?>)
+                            <i class="bi bi-box-arrow-right"></i> Logout (<?php echo htmlspecialchars($_SESSION["username"], ENT_QUOTES, 'UTF-8'); ?>)
                         </a>
                     </li>
                 </ul>
@@ -131,20 +135,28 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                         <?php if (!empty($error)): ?>
                             <div class="alert alert-danger d-flex align-items-center gap-2" role="alert">
                                 <i class="bi bi-exclamation-triangle-fill"></i>
-                                <div><?php echo $error; ?></div>
+                                <div><?php echo htmlspecialchars($error); ?></div>
                             </div>
                         <?php endif; ?>
 
+                        <!-- Client-Side JS Alert Placeholder -->
+                        <div id="js-error-alert" class="alert alert-danger d-none align-items-center gap-2" role="alert">
+                            <i class="bi bi-exclamation-triangle-fill"></i>
+                            <div id="js-error-msg"></div>
+                        </div>
+
                         <!-- Post Edit Form -->
-                        <form action="edit-post.php?id=<?php echo $post['id']; ?>" method="POST">
+                        <form id="edit-post-form" action="edit-post.php?id=<?php echo $post['id']; ?>" method="POST">
                             <div class="mb-3">
                                 <label for="title" class="form-label fw-semibold">Post Title</label>
-                                <input type="text" name="title" id="title" class="form-control form-control-lg" placeholder="Enter post title" required value="<?php echo isset($title) ? htmlspecialchars($title) : htmlspecialchars($post['title']); ?>">
+                                <!-- XSS Protection: sanitizing title values on display -->
+                                <input type="text" name="title" id="title" class="form-control form-control-lg" placeholder="Enter post title" required value="<?php echo htmlspecialchars($post['title'], ENT_QUOTES, 'UTF-8'); ?>">
                             </div>
 
                             <div class="mb-4">
                                 <label for="content" class="form-label fw-semibold">Content</label>
-                                <textarea name="content" id="content" class="form-control" placeholder="Write your post content here..." rows="8" required><?php echo isset($content) ? htmlspecialchars($content) : htmlspecialchars($post['content']); ?></textarea>
+                                <!-- XSS Protection: sanitizing content values on display -->
+                                <textarea name="content" id="content" class="form-control" placeholder="Write your post content here..." rows="8" required><?php echo htmlspecialchars($post['content'], ENT_QUOTES, 'UTF-8'); ?></textarea>
                             </div>
 
                             <div class="d-flex gap-2">
@@ -163,9 +175,41 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     <!-- Footer -->
     <footer class="bg-dark text-muted py-4 mt-auto border-top border-primary border-4">
         <div class="container text-center">
-            <p class="mb-0">Task 3: Advanced Blog System | Intern: <span class="text-white fw-bold">Abhinav</span></p>
+            <p class="mb-0">Task 4: Secure Blog System | Intern: <span class="text-white fw-bold">Abhinav</span></p>
         </div>
     </footer>
+
+    <!-- Client-side Validation Handler -->
+    <script>
+    document.getElementById("edit-post-form").addEventListener("submit", function(event) {
+        const titleInput = document.getElementById("title").value.trim();
+        const contentInput = document.getElementById("content").value.trim();
+        const errorAlert = document.getElementById("js-error-alert");
+        const errorMsg = document.getElementById("js-error-msg");
+        
+        let clientError = "";
+
+        // Reset errors state
+        errorAlert.classList.add("d-none");
+
+        // Validate lengths
+        if (titleInput === "") {
+            clientError = "Post title is required.";
+        } else if (contentInput === "") {
+            clientError = "Post content is required.";
+        } else if (contentInput.length < 10) {
+            clientError = "Post content must be at least 10 characters long.";
+        }
+
+        if (clientError !== "") {
+            event.preventDefault(); // Stop form submission
+            errorMsg.textContent = clientError;
+            errorAlert.classList.remove("d-none");
+            errorAlert.classList.add("d-flex");
+            window.scrollTo(0, 0); // Scroll to error display
+        }
+    });
+    </script>
 
     <!-- Bootstrap 5 Bundle JS CDN -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>

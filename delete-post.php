@@ -1,16 +1,10 @@
 <?php
-// Project: PHP & MySQL Blog Management System (Task 2)
+// Project: PHP & MySQL Blog Management System (Task 4)
 // File: delete-post.php
-// Description: Controller to delete posts by ID.
+// Description: Upgraded post deletion controller enforcing access control and ownership restrictions.
 
-// Start session
-session_start();
-
-// Verify user authentication
-if (!isset($_SESSION["logged_in"]) || $_SESSION["logged_in"] !== true) {
-    header("Location: login.php");
-    exit;
-}
+// Enforce auth session middleware
+require_once "middleware/auth.php";
 
 // Include database connection
 require_once "config/database.php";
@@ -25,18 +19,33 @@ if (empty($post_id)) {
 }
 
 try {
-    // Delete SQL statement
-    $stmt = $conn->prepare("DELETE FROM posts WHERE id = :id");
+    // 1. Fetch the post first to verify existence and check ownership constraints
+    $stmt = $conn->prepare("SELECT user_id FROM posts WHERE id = :id LIMIT 1");
     $stmt->execute(['id' => $post_id]);
+    $post = $stmt->fetch(PDO::FETCH_ASSOC);
 
-    // Check if a row was actually deleted
-    if ($stmt->rowCount() > 0) {
-        $_SESSION["success"] = "Post deleted successfully!";
-    } else {
+    if (!$post) {
         $_SESSION["error"] = "Post not found or already deleted.";
+        header("Location: dashboard.php");
+        exit;
     }
+
+    // 2. SECURITY CHECK (RBAC): Enforce ownership permissions
+    // Admin can delete any post, Editors can ONLY delete their own posts
+    if ($_SESSION["role"] !== "admin" && (int)$post["user_id"] !== (int)$_SESSION["user_id"]) {
+        $_SESSION["error"] = "Access Denied: You do not have permission to delete this article.";
+        header("Location: dashboard.php");
+        exit;
+    }
+
+    // 3. Delete using prepared statement
+    $delete_stmt = $conn->prepare("DELETE FROM posts WHERE id = :id");
+    $delete_stmt->execute(['id' => $post_id]);
+
+    $_SESSION["success"] = "Post deleted successfully!";
 } catch (PDOException $e) {
-    $_SESSION["error"] = "Database Error: " . $e->getMessage();
+    error_log("Post Delete Query Error: " . $e->getMessage());
+    $_SESSION["error"] = "An error occurred deleting the post from the database.";
 }
 
 // Redirect back to dashboard

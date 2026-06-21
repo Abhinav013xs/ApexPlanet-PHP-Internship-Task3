@@ -1,9 +1,21 @@
 <?php
-// Project: PHP & MySQL Blog Management System (Task 3)
+// Project: PHP & MySQL Blog Management System (Task 4)
 // File: search.php
-// Description: Public search results page with pagination support.
+// Description: Upgraded public search results page with pagination and security hardening (XSS & SQL Injection protection).
 
-session_start();
+// Start the session with secure configurations
+if (session_status() === PHP_SESSION_NONE) {
+    session_set_cookie_params([
+        'lifetime' => 0,
+        'path' => '/',
+        'domain' => '',
+        'secure' => isset($_SERVER['HTTPS']),
+        'httponly' => true,
+        'samesite' => 'Strict'
+    ]);
+    session_start();
+}
+
 require_once "config/database.php";
 
 $search_query = trim($_GET["q"] ?? "");
@@ -22,7 +34,7 @@ $error_message = "";
 
 try {
     if (!empty($search_query)) {
-        // 1. Get the total count of matching articles for pagination calculation
+        // 1. Get the total count of matching articles for pagination calculation using Prepared Statement
         $count_stmt = $conn->prepare("SELECT COUNT(*) FROM posts WHERE title LIKE :search OR content LIKE :search");
         $count_stmt->execute(['search' => '%' . $search_query . '%']);
         $total_posts = (int)$count_stmt->fetchColumn();
@@ -30,10 +42,17 @@ try {
         // Calculate total pages
         $total_pages = ceil($total_posts / $limit);
 
-        // 2. Fetch the paginated matching records
-        $stmt = $conn->prepare("SELECT * FROM posts WHERE title LIKE :search OR content LIKE :search ORDER BY created_at DESC LIMIT :limit OFFSET :offset");
+        // 2. Fetch the paginated matching records joined with author usernames
+        $stmt = $conn->prepare("
+            SELECT posts.*, users.username 
+            FROM posts 
+            LEFT JOIN users ON posts.user_id = users.id 
+            WHERE posts.title LIKE :search OR posts.content LIKE :search 
+            ORDER BY posts.created_at DESC 
+            LIMIT :limit OFFSET :offset
+        ");
         
-        // Bind parameters
+        // Bind parameters securely
         $stmt->bindValue(':search', '%' . $search_query . '%', PDO::PARAM_STR);
         $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
         $stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
@@ -46,7 +65,8 @@ try {
         exit;
     }
 } catch (PDOException $e) {
-    $error_message = "Error performing search: " . $e->getMessage();
+    error_log("Search Query Error: " . $e->getMessage());
+    $error_message = "Could not perform search due to an internal system error.";
 }
 ?>
 <!DOCTYPE html>
@@ -61,7 +81,7 @@ try {
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
     <link rel="stylesheet" href="css/style.css">
 </head>
-<body>
+<body class="bg-light d-flex flex-column min-vh-100">
 
     <!-- Responsive Navigation Bar -->
     <nav class="navbar navbar-expand-lg navbar-dark bg-dark shadow-sm">
@@ -80,7 +100,7 @@ try {
                     </li>
                     <?php if (isset($_SESSION["logged_in"]) && $_SESSION["logged_in"] === true): ?>
                         <li class="nav-item"><a class="nav-link" href="dashboard.php"><i class="bi bi-speedometer2"></i> Dashboard</a></li>
-                        <li class="nav-item"><a class="nav-link logout-link text-danger" href="logout.php"><i class="bi bi-box-arrow-right"></i> Logout (<?php echo htmlspecialchars($_SESSION["username"]); ?>)</a></li>
+                        <li class="nav-item"><a class="nav-link logout-link text-danger" href="logout.php"><i class="bi bi-box-arrow-right"></i> Logout (<?php echo htmlspecialchars($_SESSION["username"], ENT_QUOTES, 'UTF-8'); ?>)</a></li>
                     <?php else: ?>
                         <li class="nav-item"><a class="nav-link" href="login.php"><i class="bi bi-box-arrow-in-right"></i> Login</a></li>
                         <li class="nav-item"><a class="nav-link" href="register.php"><i class="bi bi-person-plus-fill"></i> Register</a></li>
@@ -97,7 +117,7 @@ try {
         <div class="row align-items-center mb-5 border-bottom pb-3">
             <div class="col-md-6">
                 <h1>Search Results</h1>
-                <p class="text-muted mb-0">Showing results for: <strong class="text-primary">"<?php echo htmlspecialchars($search_query); ?>"</strong> (<?php echo $total_posts; ?> matches found)</p>
+                <p class="text-muted mb-0">Showing results for: <strong class="text-primary">"<?php echo htmlspecialchars($search_query, ENT_QUOTES, 'UTF-8'); ?>"</strong> (<?php echo $total_posts; ?> matches found)</p>
             </div>
             
             <!-- Floating Inline Search Form -->
@@ -105,7 +125,7 @@ try {
                 <form action="search.php" method="GET" class="d-flex gap-2">
                     <div class="input-group">
                         <span class="input-group-text bg-white border-end-0 text-muted"><i class="bi bi-search"></i></span>
-                        <input type="text" name="q" class="form-control border-start-0" placeholder="Search blog posts..." required value="<?php echo htmlspecialchars($search_query); ?>">
+                        <input type="text" name="q" class="form-control border-start-0" placeholder="Search blog posts..." required value="<?php echo htmlspecialchars($search_query, ENT_QUOTES, 'UTF-8'); ?>">
                         <button type="submit" class="btn btn-primary fw-semibold">Search</button>
                     </div>
                 </form>
@@ -116,7 +136,7 @@ try {
         <?php if (!empty($error_message)): ?>
             <div class="alert alert-danger d-flex align-items-center gap-2" role="alert">
                 <i class="bi bi-exclamation-triangle-fill"></i>
-                <div><?php echo $error_message; ?></div>
+                <div><?php echo htmlspecialchars($error_message); ?></div>
             </div>
         <?php endif; ?>
 
@@ -128,12 +148,19 @@ try {
                     <?php foreach ($posts as $post): ?>
                         <div class="card shadow-sm border-0 rounded-3 mb-4 hover-card">
                             <div class="card-body p-4">
-                                <h2 class="card-title h3 fw-bold mb-2"><?php echo htmlspecialchars($post['title']); ?></h2>
+                                <!-- XSS Protection -->
+                                <h2 class="card-title h3 fw-bold mb-2"><?php echo htmlspecialchars($post['title'], ENT_QUOTES, 'UTF-8'); ?></h2>
+                                
                                 <p class="card-subtitle text-muted mb-3 fs-7">
+                                    <!-- XSS Protection -->
+                                    <i class="bi bi-person"></i> By: <strong><?php echo htmlspecialchars($post['username'] ?? 'System', ENT_QUOTES, 'UTF-8'); ?></strong>
+                                    <span class="mx-2">|</span>
                                     <i class="bi bi-calendar3"></i> Published on: <?php echo date('F d, Y \a\t g:i A', strtotime($post['created_at'])); ?>
                                 </p>
+                                
+                                <!-- XSS Protection -->
                                 <div class="card-text post-content-preview">
-                                    <?php echo htmlspecialchars($post['content']); ?>
+                                    <?php echo htmlspecialchars($post['content'], ENT_QUOTES, 'UTF-8'); ?>
                                 </div>
                             </div>
                         </div>
@@ -187,7 +214,7 @@ try {
     <!-- Footer -->
     <footer class="bg-dark text-muted py-4 mt-auto border-top border-primary border-4">
         <div class="container text-center">
-            <p class="mb-0">Task 3: Advanced Blog System | Intern: <span class="text-white fw-bold">Abhinav</span></p>
+            <p class="mb-0">Task 4: Secure Blog System | Intern: <span class="text-white fw-bold">Abhinav</span></p>
         </div>
     </footer>
 

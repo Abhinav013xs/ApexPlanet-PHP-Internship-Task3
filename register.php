@@ -1,7 +1,7 @@
 <?php
-// Project: PHP & MySQL Blog Management System (Task 3)
+// Project: PHP & MySQL Blog Management System (Task 4)
 // File: register.php
-// Description: Handle user signup using Bootstrap 5 visual elements.
+// Description: Upgraded registration script containing both client-side and server-side validation checks and PDO prepared statements.
 
 // Start the session
 session_start();
@@ -12,7 +12,7 @@ if (isset($_SESSION["logged_in"]) && $_SESSION["logged_in"] === true) {
     exit;
 }
 
-// Include database connection configuration
+// Include database connection
 require_once "config/database.php";
 
 $error = "";
@@ -23,24 +23,28 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     $username = trim($_POST["username"] ?? "");
     $password = trim($_POST["password"] ?? "");
     
-    // Basic validation checks
-    if (empty($username) || empty($password)) {
-        $error = "Please fill in all fields.";
+    // Server-Side Form Validation
+    if (empty($username)) {
+        $error = "Username is required.";
+    } elseif (strlen($username) < 3) {
+        $error = "Username must be at least 3 characters long.";
+    } elseif (empty($password)) {
+        $error = "Password is required.";
     } elseif (strlen($password) < 6) {
         $error = "Password must be at least 6 characters long.";
     } else {
         try {
-            // Check if username is already taken in the database
-            $check_stmt = $conn->prepare("SELECT id FROM users WHERE username = :username");
+            // Check if username is already taken using a secure Prepared Statement
+            $check_stmt = $conn->prepare("SELECT id FROM users WHERE username = :username LIMIT 1");
             $check_stmt->execute(['username' => $username]);
             
             if ($check_stmt->rowCount() > 0) {
-                $error = "Username is already taken. Please select another.";
+                $error = "Username is already taken. Please choose another.";
             } else {
-                // Securely hash the password
+                // Securely hash the user password
                 $hashed_password = password_hash($password, PASSWORD_DEFAULT);
                 
-                // Insert the new user into the database
+                // Insert the new user (default role is 'editor' as set in the SQL schema)
                 $insert_stmt = $conn->prepare("INSERT INTO users (username, password) VALUES (:username, :password)");
                 $insert_stmt->execute([
                     'username' => $username,
@@ -50,7 +54,9 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                 $success = "Registration successful! You can now <a href='login.php' class='alert-link'>log in here</a>.";
             }
         } catch (PDOException $e) {
-            $error = "Error saving to database: " . $e->getMessage();
+            // Avoid leaking system path/SQL errors
+            error_log("Registration DB Error: " . $e->getMessage());
+            $error = "An internal system error occurred. Please try again later.";
         }
     }
 }
@@ -67,7 +73,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
     <link rel="stylesheet" href="css/style.css">
 </head>
-<body>
+<body class="bg-light d-flex flex-column min-vh-100">
 
     <!-- Responsive Navigation Bar -->
     <nav class="navbar navbar-expand-lg navbar-dark bg-dark shadow-sm">
@@ -81,15 +87,9 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             </button>
             <div class="collapse navbar-collapse" id="navbarNav">
                 <ul class="navbar-nav ms-auto gap-2">
-                    <li class="nav-item">
-                        <a class="nav-link" href="index.php"><i class="bi bi-house-door-fill"></i> Home</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="login.php"><i class="bi bi-box-arrow-in-right"></i> Login</a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link active" href="register.php"><i class="bi bi-person-plus-fill"></i> Register</a>
-                    </li>
+                    <li class="nav-item"><a class="nav-link" href="index.php"><i class="bi bi-house-door-fill"></i> Home</a></li>
+                    <li class="nav-item"><a class="nav-link" href="login.php"><i class="bi bi-box-arrow-in-right"></i> Login</a></li>
+                    <li class="nav-item"><a class="nav-link active" href="register.php"><i class="bi bi-person-plus-fill"></i> Register</a></li>
                 </ul>
             </div>
         </div>
@@ -111,9 +111,15 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                         <?php if (!empty($error)): ?>
                             <div class="alert alert-danger d-flex align-items-center gap-2" role="alert">
                                 <i class="bi bi-exclamation-triangle-fill"></i>
-                                <div><?php echo $error; ?></div>
+                                <div><?php echo htmlspecialchars($error); ?></div>
                             </div>
                         <?php endif; ?>
+
+                        <!-- JS Client-side Validation Alert placeholder -->
+                        <div id="js-error-alert" class="alert alert-danger d-none align-items-center gap-2" role="alert">
+                            <i class="bi bi-exclamation-triangle-fill"></i>
+                            <div id="js-error-msg"></div>
+                        </div>
 
                         <!-- Success Alerts -->
                         <?php if (!empty($success)): ?>
@@ -124,7 +130,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                         <?php endif; ?>
 
                         <!-- Form -->
-                        <form action="register.php" method="POST" autocomplete="off">
+                        <form id="register-form" action="register.php" method="POST" autocomplete="off">
                             <div class="mb-3">
                                 <label for="username" class="form-label fw-semibold">Choose Username</label>
                                 <div class="input-group">
@@ -159,9 +165,43 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     <!-- Footer -->
     <footer class="bg-dark text-muted py-4 mt-auto border-top border-primary border-4">
         <div class="container text-center">
-            <p class="mb-0">Task 3: Advanced Blog System | Intern: <span class="text-white fw-bold">Abhinav</span></p>
+            <p class="mb-0">Task 4: Secure Blog System | Intern: <span class="text-white fw-bold">Abhinav</span></p>
         </div>
     </footer>
+
+    <!-- Client-side Validation Handler -->
+    <script>
+    document.getElementById("register-form").addEventListener("submit", function(event) {
+        const usernameInput = document.getElementById("username").value.trim();
+        const passwordInput = document.getElementById("password").value;
+        const errorAlert = document.getElementById("js-error-alert");
+        const errorMsg = document.getElementById("js-error-msg");
+        
+        let clientError = "";
+
+        // Reset errors state
+        errorAlert.classList.add("d-none");
+
+        // Validate fields length and format
+        if (usernameInput === "") {
+            clientError = "Username is required.";
+        } else if (usernameInput.length < 3) {
+            clientError = "Username must be at least 3 characters long.";
+        } else if (passwordInput === "") {
+            clientError = "Password is required.";
+        } else if (passwordInput.length < 6) {
+            clientError = "Password must be at least 6 characters long.";
+        }
+
+        if (clientError !== "") {
+            event.preventDefault(); // Stop form submission
+            errorMsg.textContent = clientError;
+            errorAlert.classList.remove("d-none");
+            errorAlert.classList.add("d-flex");
+            window.scrollTo(0, 0); // Scroll to error display
+        }
+    });
+    </script>
 
     <!-- Bootstrap 5 Bundle JS CDN -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
